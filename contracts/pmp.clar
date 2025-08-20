@@ -701,5 +701,43 @@
 
 
 ;; Get price data for an asset from a specific source
+(define-read-only (get-price-data (asset (string-ascii 10)) (source principal))
+ (map-get? price-data { asset: asset, source: source })
+)
+
+
+;; Get latest price history for an asset
+(define-read-only (get-price-history (asset (string-ascii 10)) (block-height-lookup uint))
+ (map-get? price-history { asset: asset, block-height: block-height-lookup })
+)
+
+
+;; Get asset monitoring configuration
+(define-read-only (get-asset-monitor (asset (string-ascii 10)))
+ (map-get? asset-monitors { asset: asset })
+)
+
+
+;; Get user subscription details
+(define-read-only (get-user-subscription (user principal) (asset (string-ascii 10)))
+ (map-get? user-subscriptions { user: user, asset: asset })
+)
+
+
+;; Get price source information
+(define-read-only (get-price-source (source principal))
+ (map-get? price-sources { source: source })
+)
+
+
+;; Get contract status
+(define-read-only (get-contract-status)
+ {
+   status: (var-get contract-status),
+   total-pings: (var-get total-pings),
+   last-emergency-block: (var-get last-emergency-block),
+   monitoring-enabled: (var-get monitoring-enabled)
+ }
+)
 
 
