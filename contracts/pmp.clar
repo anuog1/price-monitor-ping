@@ -621,3 +621,18 @@
            { asset: asset, block-height: block-height }
            {
              price: new-price,
+            change-percentage: change-percentage,
+             volume: u0, ;; TODO: Get actual volume
+             volatility-score: u0 ;; TODO: Calculate from recent history
+           }
+         )
+        
+         (ok ping-id)
+       )
+     )
+     ERR-NOT-FOUND
+   )
+ )
+)
+
+
