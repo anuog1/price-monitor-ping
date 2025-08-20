@@ -84,3 +84,42 @@
 (define-map asset-monitors
  { asset: (string-ascii 10) }
  {
+  upper-threshold: uint,
+   lower-threshold: uint,
+   percentage-change-threshold: uint,
+   is-active: bool,
+   alert-count: uint,
+   last-alert-block: uint,
+   owner: principal
+ }
+)
+
+
+;; Authorized price sources and their reliability scores
+(define-map price-sources
+ { source: principal }
+ {
+   is-authorized: bool,
+   reliability-score: uint, ;; 0-100 based on historical accuracy
+   total-submissions: uint,
+   successful-submissions: uint,
+   last-submission-block: uint,
+   stake-amount: uint
+ }
+)
+
+
+;; User subscriptions for price alerts
+(define-map user-subscriptions
+ { user: principal, asset: (string-ascii 10) }
+ {
+   notification-type: uint, ;; 1=email, 2=webhook, 3=on-chain
+   threshold-up: uint,
+   threshold-down: uint,
+   is-active: bool,
+   subscription-fee-paid: uint,
+   expiry-block: uint
+ }
+)
+
+
