@@ -677,7 +677,6 @@
  )
 )
 
-
 ;; Pause/unpause contract (admin only)
 (define-public (set-contract-status (new-status uint))
  (let ((caller tx-sender))
