@@ -738,5 +738,3 @@
    monitoring-enabled: (var-get monitoring-enabled)
  }
 )
-
-
