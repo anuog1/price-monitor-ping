@@ -369,3 +369,255 @@
    current-pings
  )
 )
+;; Check if enough time has passed since last ping
+(define-private (can-ping-now (last-ping-block uint))
+ (>= (- block-height last-ping-block) MAX-PING-FREQUENCY)
+)
+
+
+;; Validate asset name format
+(define-private (is-asset-name-valid (asset (string-ascii 10)))
+ (and
+   (> (len asset) u0)
+   (<= (len asset) u10)
+ )
+)
+
+
+;; Update source reliability score after submission
+(define-private (update-source-reliability (source principal) (was-successful bool))
+ (match (map-get? price-sources { source: source })
+   source-data
+   (let (
+     (new-total (+ (get total-submissions source-data) u1))
+     (new-successful (if was-successful
+                       (+ (get successful-submissions source-data) u1)
+                       (get successful-submissions source-data)))
+     (new-score (calculate-reliability-score new-successful new-total))
+   )
+     (map-set price-sources
+       { source: source }
+       (merge source-data {
+         total-submissions: new-total,
+         successful-submissions: new-successful,
+         reliability-score: new-score,
+         last-submission-block: block-height
+       })
+     )
+     true
+   )
+   false
+ )
+)
+
+
+;; public functions
+;; Submit new price data from authorized sources
+(define-public (submit-price-data (asset (string-ascii 10)) (price uint) (confidence uint) (volume uint))
+ (let ((caller tx-sender))
+   ;; Validate contract is active
+   (asserts! (is-contract-active) ERR-CONTRACT-PAUSED)
+   ;; Validate asset name
+   (asserts! (is-asset-name-valid asset) ERR-INVALID-PRICE)
+   ;; Validate price
+   (asserts! (is-price-valid price) ERR-INVALID-PRICE)
+   ;; Validate confidence level (0-100)
+   (asserts! (<= confidence u100) ERR-INVALID-PERCENTAGE)
+ ;; Check if source is authorized
+   (asserts! (is-source-reliable caller u1) ERR-UNAUTHORIZED)
+  
+   ;; Store price data
+   (map-set price-data
+     { asset: asset, source: caller }
+     {
+       price: price,
+       timestamp: block-height,
+       block-height: block-height,
+       confidence: confidence,
+       volume: volume,
+       is-verified: true
+     }
+   )
+  
+   ;; Update source reliability
+   (update-source-reliability caller true)
+  
+   ;; Check if circuit breaker should trigger
+   (if (should-trigger-circuit-breaker asset price)
+     (map-set circuit-breakers
+       { asset: asset }
+       {
+         is-triggered: true,
+         trigger-price: price,
+         trigger-block: block-height,
+         trigger-reason: "Price threshold exceeded",
+         cooldown-period: BLOCKS-PER-DAY,
+         reset-block: (+ block-height BLOCKS-PER-DAY)
+       }
+     )
+     true ;; Continue normal operation
+   )
+  
+   (ok true)
+ )
+)
+
+
+;; Create or update asset monitoring configuration
+(define-public (setup-asset-monitor (asset (string-ascii 10)) (upper-threshold uint) (lower-threshold uint) (percentage-threshold uint))
+(let ((caller tx-sender))
+   ;; Validate contract is active
+   (asserts! (is-contract-active) ERR-CONTRACT-PAUSED)
+   ;; Validate asset name
+   (asserts! (is-asset-name-valid asset) ERR-INVALID-PRICE)
+   ;; Validate thresholds
+   (asserts! (is-price-valid upper-threshold) ERR-INVALID-PRICE)
+   (asserts! (is-price-valid lower-threshold) ERR-INVALID-PRICE)
+   (asserts! (> upper-threshold lower-threshold) ERR-INVALID-PRICE)
+   (asserts! (<= percentage-threshold MAX-PERCENTAGE-CHANGE) ERR-INVALID-PERCENTAGE)
+   (asserts! (>= percentage-threshold MIN-PERCENTAGE-CHANGE) ERR-INVALID-PERCENTAGE)
+  
+   ;; Set up monitoring configuration
+   (map-set asset-monitors
+     { asset: asset }
+     {
+       upper-threshold: upper-threshold,
+       lower-threshold: lower-threshold,
+       percentage-change-threshold: percentage-threshold,
+       is-active: true,
+       alert-count: u0,
+       last-alert-block: u0,
+       owner: caller
+     }
+   )
+  
+   ;; Initialize asset metadata if not exists
+   (if (is-none (map-get? asset-metadata { asset: asset }))
+     (map-set asset-metadata
+       { asset: asset }
+       {
+         full-name: asset,
+         decimals: STX-DECIMALS,
+         is-active: true,
+         min-price: lower-threshold,
+         max-price: upper-threshold,
+         circuit-breaker-threshold: (* upper-threshold u5), ;; 5x upper threshold
+         total-monitors: u1
+       }
+     )
+   ;; Update existing metadata
+     (match (map-get? asset-metadata { asset: asset })
+       existing-data
+       (map-set asset-metadata
+         { asset: asset }
+         (merge existing-data {
+           total-monitors: (+ (get total-monitors existing-data) u1)
+         })
+       )
+       false
+     )
+   )
+  
+   (ok true)
+ )
+)
+
+
+;; Subscribe to price alerts for an asset
+(define-public (subscribe-to-alerts (asset (string-ascii 10)) (threshold-up uint) (threshold-down uint) (notification-type uint))
+ (let ((caller tx-sender))
+   ;; Validate contract is active
+   (asserts! (is-contract-active) ERR-CONTRACT-PAUSED)
+   ;; Validate subscription parameters
+   (asserts! (is-subscription-valid threshold-up threshold-down notification-type) ERR-INVALID-PRICE)
+   ;; Validate asset exists
+   (asserts! (is-some (map-get? asset-metadata { asset: asset })) ERR-NOT-FOUND)
+  
+   ;; Check if subscription already exists
+   (asserts! (is-none (map-get? user-subscriptions { user: caller, asset: asset })) ERR-ALREADY-EXISTS)
+  
+   ;; Create subscription
+   (map-set user-subscriptions
+     { user: caller, asset: asset }
+     {
+       notification-type: notification-type,
+       threshold-up: threshold-up,
+       threshold-down: threshold-down,
+       is-active: true,
+       subscription-fee-paid: u0,
+     expiry-block: (+ block-height (* BLOCKS-PER-DAY u30)) ;; 30 days expiry
+     }
+   )
+  
+   (ok true)
+ )
+)
+;; Trigger price alert/ping when thresholds are met
+(define-public (trigger-price-ping (asset (string-ascii 10)) (old-price uint) (new-price uint) (trigger-type uint))
+ (let (
+   (caller tx-sender)
+   (ping-id (generate-ping-id))
+ )
+   ;; Validate contract is active
+   (asserts! (is-contract-active) ERR-CONTRACT-PAUSED)
+   ;; Validate caller is authorized source
+   (asserts! (is-source-reliable caller u50) ERR-UNAUTHORIZED)
+   ;; Validate prices
+   (asserts! (is-price-valid old-price) ERR-INVALID-PRICE)
+   (asserts! (is-price-valid new-price) ERR-INVALID-PRICE)
+   ;; Validate trigger type (1=threshold, 2=percentage, 3=emergency)
+   (asserts! (and (>= trigger-type u1) (<= trigger-type u3)) ERR-INVALID-PERCENTAGE)
+  
+   ;; Check if asset monitor exists and is active
+   (match (map-get? asset-monitors { asset: asset })
+     monitor-data
+     (begin
+       (asserts! (get is-active monitor-data) ERR-NOT-FOUND)
+       ;; Check if enough time has passed since last alert
+       (asserts! (can-ping-now (get last-alert-block monitor-data)) ERR-THRESHOLD-NOT-MET)
+      
+       ;; Determine severity based on price change
+       (let (
+         (change-percentage (calculate-percentage-change old-price new-price))
+         (severity (if (>= (if (>= change-percentage 0)
+                             (to-uint change-percentage)
+                             (to-uint (- change-percentage))) u1000) ;; 10%
+                      u4 ;; Critical
+                      (if (>= (if (>= change-percentage 0)
+                                (to-uint change-percentage)
+                                (to-uint (- change-percentage))) u500) ;; 5%
+                         u3 ;; High
+                         (if (>= (if (>= change-percentage 0)
+                                   (to-uint change-percentage)
+                                   (to-uint (- change-percentage))) u200) ;; 2%
+                            u2 ;; Medium
+                            u1)))) ;; Low
+       )
+         ;; Record ping in history
+         (map-set ping-history
+           { ping-id: ping-id }
+           {
+             asset: asset,
+             trigger-type: trigger-type,
+             old-price: old-price,
+             new-price: new-price,
+             block-height: block-height,
+             affected-users: u1, ;; TODO: Count actual affected users
+             severity: severity
+           }
+         )
+        
+         ;; Update monitor with new alert
+         (map-set asset-monitors
+           { asset: asset }
+           (merge monitor-data {
+             alert-count: (+ (get alert-count monitor-data) u1),
+             last-alert-block: block-height
+           })
+         )
+        
+         ;; Store price history
+         (map-set price-history
+           { asset: asset, block-height: block-height }
+           {
+             price: new-price,
