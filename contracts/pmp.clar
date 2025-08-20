@@ -121,5 +121,145 @@
    expiry-block: uint
  }
 )
+;; Ping/Alert history for analytics
+(define-map ping-history
+ { ping-id: uint }
+ {
+   asset: (string-ascii 10),
+   trigger-type: uint, ;; 1=threshold, 2=percentage, 3=emergency
+   old-price: uint,
+   new-price: uint,
+   block-height: uint,
+   affected-users: uint,
+   severity: uint ;; 1=low, 2=medium, 3=high, 4=critical
+ }
+)
+
+
+;; Asset metadata and configuration
+(define-map asset-metadata
+ { asset: (string-ascii 10) }
+ {
+   full-name: (string-ascii 50),
+   decimals: uint,
+   is-active: bool,
+   min-price: uint,
+   max-price: uint,
+   circuit-breaker-threshold: uint, ;; Emergency stop threshold
+   total-monitors: uint
+ }
+)
+
+
+;; Governance and admin controls
+(define-map admin-permissions
+ { admin: principal }
+ {
+   can-pause-contract: bool,
+   can-add-sources: bool,
+   can-modify-thresholds: bool,
+   can-emergency-stop: bool,
+   permission-level: uint ;; 1=read, 2=write, 3=admin, 4=super-admin
+ }
+)
+
+
+;; Performance metrics and analytics
+(define-map performance-metrics
+ { metric-type: (string-ascii 20), period: uint }
+ {
+   value: uint,
+   timestamp: uint,
+   metadata: (string-ascii 100)
+ }
+)
+;; Staking and incentive system for price sources
+(define-map source-stakes
+ { source: principal }
+ {
+   staked-amount: uint,
+   lock-period: uint,
+   unlock-block: uint,
+   earned-rewards: uint,
+   penalty-count: uint,
+   last-reward-block: uint
+ }
+)
+
+
+;; Circuit breaker for emergency situations
+(define-map circuit-breakers
+ { asset: (string-ascii 10) }
+ {
+   is-triggered: bool,
+   trigger-price: uint,
+   trigger-block: uint,
+   trigger-reason: (string-ascii 50),
+   cooldown-period: uint,
+   reset-block: uint
+ }
+)
+
+
+;; Cross-chain price data (for future expansion)
+(define-map cross-chain-prices
+ { asset: (string-ascii 10), chain: (string-ascii 20) }
+ {
+   price: uint,
+   bridge-fee: uint,
+   last-sync-block: uint,
+   is-synced: bool,
+   price-deviation-percentage: int
+ }
+)
+
+
+;; private functions
+;; Helper function to check if user is contract owner
+(define-private (is-contract-owner (user principal))
+ (is-eq user CONTRACT-OWNER)
+)
+;; Helper function to check if contract is active
+(define-private (is-contract-active)
+ (is-eq (var-get contract-status) STATUS-ACTIVE)
+)
+
+
+;; Helper function to validate price within acceptable range
+(define-private (is-price-valid (price uint))
+ (and
+   (>= price MIN-PRICE-THRESHOLD)
+   (<= price MAX-PRICE-THRESHOLD)
+   (> price u0)
+ )
+)
+
+
+;; Helper function to check if price data is still fresh
+(define-private (is-price-fresh (timestamp uint))
+ (let ((current-block block-height))
+   (<= (- current-block timestamp) PRICE-VALIDITY-PERIOD)
+ )
+)
+
+
+;; Calculate percentage change between two prices (returns int, can be negative)
+(define-private (calculate-percentage-change (old-price uint) (new-price uint))
+ (if (is-eq old-price u0)
+   0 ;; Return 0 if old price is zero to avoid division by zero
+   (let (
+     (price-diff (if (>= new-price old-price)
+                    (- new-price old-price)
+                    (- old-price new-price)))
+     (percentage (* (/ (* price-diff BASIS-POINTS-MULTIPLIER) old-price) u1))
+     (is-positive (>= new-price old-price))
+   )
+     (if is-positive
+       (to-int percentage)
+       (- (to-int percentage))
+     )
+   )
+ )
+)
 
 
